@@ -1,8 +1,8 @@
 {
   "case_id": "case_...",
   "source_image_path": "test/img_edit_exp/assets/source/{case_id}/source.png",
-  "source_image_mode": "to_generate",
-  "source_origin": "generated_from_prompt or generated_from_official_prompt",
+  "source_image_mode": "to_generate or provided_external",
+  "source_origin": "generated_from_prompt, generated_from_official_prompt, or Gemini",
   "source_prompt_origin": "case_design or official_web_example",
   "source_prompt": null,
   "source_generator": {
@@ -13,5 +13,9 @@
     "created_at": null
   },
   "source_image_size": null,
+  "source_validated": null,
+  "source_quality_note": "",
+  "source_validated_by": null,
+  "source_validated_at": null,
   "notes": ""
 }

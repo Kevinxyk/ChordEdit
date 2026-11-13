@@ -43,7 +43,7 @@
 ```text
 test/img_edit_exp/
 ├── assets/source/{case_id}/
-│   ├── source.png
+│   ├── source.png or source_gemini.jpg
 │   ├── meta.jsonl
 │   └── source_metadata.json
 └── runs/{run_id}/
@@ -51,7 +51,7 @@ test/img_edit_exp/
     └── run_records.jsonl
 ```
 
-其中 `source.png` 是该 case 后续所有编辑实验共同使用的原图；`meta.jsonl` 保存与项目现有 `images/<case>/meta.jsonl` 兼容的 source/target/edit prompt；`source_metadata.json` 记录原图来源、生成模型、source seed、分辨率和生成时间。官网截图只作为 prompt 和案例语义的来源，不作为可复现的 benchmark source image；包括前三个官网 case 在内，所有 source image 都统一生成并固定为 512×512。
+其中 source image 是该 case 后续所有编辑实验共同使用的原图；`meta.jsonl` 保存与项目现有 `images/<case>/meta.jsonl` 兼容的 source/target/edit prompt；`source_metadata.json` 记录原图来源、生成模型、source seed、分辨率和生成时间。当前 `ai_A1`～`ai_E3` 使用按时间顺序导入的 Gemini `1024×1024` 图片，其余 case 使用服务器模型生成；每张图片的实际尺寸和来源都以 metadata 为准。官网截图只作为 prompt 和案例语义的来源，不作为 benchmark source image。
 
 当前第一批使用 `batch_id=exp_001`，预建的第一轮运行目录为 `exp_001_run_001`。输出文件名必须包含 seed，例如 `seed_42.png`、`seed_43.png`、`seed_44.png`。具体路径模板以 `test/img_edit_exp/test_metadata.json` 的 `image_storage` 为准。
 
@@ -253,7 +253,7 @@ a busy kitchen -> a quite bedroom
 
 #### AI-case E2：手部拓扑与左右方向
 
-`a close-up of a right hand, palm facing the camera, wearing a diamond ring on the index finger -> a close-up of the same right hand, palm facing the camera, wearing a gold ring on the middle finger`
+`a close-up of the back of a right hand, dorsal side facing the camera, wearing a diamond ring on the index finger -> a close-up of the back of the same right hand, dorsal side facing the camera, wearing a gold ring on the middle finger`
 
 观察重点：手指数量、左右手、戒指材质和具体手指位置。该 case 对空间关系很敏感，建议作为极端 case，而不是普通基线。
 

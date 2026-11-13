@@ -43,16 +43,31 @@ test/img_edit_exp/
     └── run_records.jsonl
 ```
 
-- `assets/source/{case_id}/source.png`：该 case 的唯一 canonical source image，后续不同 run 和 seed 都复用它；
+- `assets/source/{case_id}/source.png` 或 `source_gemini.jpg`：该 case 的唯一 canonical source image，后续不同 run 和 seed 都复用它；
 - `assets/source/{case_id}/meta.jsonl`：每个 case 的独立 metadata，字段兼容项目现有 `images/<case>/meta.jsonl`，可直接被本地前端数据加载器识别；
 - `source_metadata.json`：记录原图来源、source prompt、原图生成模型、source seed、分辨率和创建时间；
 - `runs/{run_id}/outputs/{case_id}/seed_{seed}.png`：某次运行的编辑结果，不能写回 source 目录；
 - `run_records.jsonl`：该次运行的自动时间与状态记录；
 - `evaluation.jsonl`：人工评分和观察结果，可引用对应的 `run_id`、`case_id` 和 seed。
 
-`prompt_source=official_web_example` 只表示 prompt 或案例语义来自官网，不表示官网截图就是实验原图。由于官网图片可能只能截图、尺寸也不一定是 512×512，前三个官网 case 同样先用统一的 SD-Turbo 配置生成 512×512 source image，再开始编辑实验。不要把 source image 每次复制到 run 目录，否则后续很难判断不同运行是否使用了完全相同的输入。
+`prompt_source=official_web_example` 只表示 prompt 或案例语义来自官网，不表示官网截图就是实验原图。当前 `ai_A1`～`ai_E3` 是按时间顺序导入的 Gemini `1024×1024` 图片，其余 case 由服务器 SD-Turbo 生成；实际尺寸、来源和文件名必须记录在 metadata 中。不要把 source image 每次复制到 run 目录，否则后续很难判断不同运行是否使用了完全相同的输入。
 
 当前已准备第一批 `exp_001` 的 source 目录和 `exp_001_run_001` 的 output 目录；另有 `source_generation_manifest.jsonl` 供服务器批量生成 source image，具体路径模板以 `test_metadata.json` 中的 `image_storage` 为准。
+
+### 2.1 source quality gate
+
+生成图片后，必须先人工检查它是否基本符合 `source_prompt`，再开始 ChordEdit 编辑实验。检查结果写入每个 case 的 `source_metadata.json` 和 `meta.jsonl`：
+
+```json
+{
+  "source_validated": true,
+  "source_quality_note": "主体、构图和主要属性符合 source prompt。",
+  "source_validated_by": "Kevin",
+  "source_validated_at": "2026-11-13T20:00:00+08:00"
+}
+```
+
+`source_validated=true` 才能进入正式评价；`null` 表示尚未检查，`false` 表示 source 不合格，应重新生成或剔除。source 不合格时，不应把后续编辑失败归因于 ChordEdit。
 
 ## 3. 评价标准
 

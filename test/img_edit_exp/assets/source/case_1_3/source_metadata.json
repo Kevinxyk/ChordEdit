@@ -16,5 +16,9 @@
   "source_image_size": "512x512",
   "status": "pending",
   "source_prompt_origin": "official_web_example",
-  "note": "Original webpage image was only available as a non-canonical screenshot; regenerated locally from the official prompt at 512x512."
+  "note": "Original webpage image was only available as a non-canonical screenshot; regenerated locally from the official prompt at 512x512.",
+  "source_validated": null,
+  "source_quality_note": "",
+  "source_validated_by": null,
+  "source_validated_at": null
 }

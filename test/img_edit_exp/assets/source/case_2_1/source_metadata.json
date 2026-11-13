@@ -14,5 +14,9 @@
     "created_at": null
   },
   "source_image_size": "512x512",
-  "status": "pending"
+  "status": "pending",
+  "source_validated": null,
+  "source_quality_note": "",
+  "source_validated_by": null,
+  "source_validated_at": null
 }
