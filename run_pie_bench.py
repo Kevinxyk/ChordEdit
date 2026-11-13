@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+import importlib.metadata
 import json
 import logging
+import platform
 import shutil
+import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -47,6 +52,8 @@ DEFAULT_PIE_ROOT = Path(__file__).resolve().parent / "pie_bench"
 DEFAULT_MAPPING_FILE = "mapping_file.json"
 DEFAULT_IMAGE_SUBDIR = "annotation_images"
 DEFAULT_METHOD_NAME = "ChordEdit"
+DEFAULT_EXPERIMENT_BATCH_ID = "exp_001"
+DEFAULT_TIMING_FILENAME = "run_records.jsonl"
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,69 @@ class PieRecord:
     original_prompt: str
     edited_prompt: str
     edit_instruction: str
+
+
+def now_iso() -> str:
+    """Return a local-time ISO 8601 timestamp with an explicit timezone."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def elapsed_seconds(start: float) -> float:
+    """Return a stable, JSON-friendly wall-clock duration."""
+    return round(time.perf_counter() - start, 6)
+
+
+def package_version(package_name: str) -> Optional[str]:
+    try:
+        return importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def git_commit() -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def runtime_versions() -> Dict[str, Optional[str]]:
+    return {
+        "python": platform.python_version(),
+        "torch": getattr(torch, "__version__", None),
+        "diffusers": package_version("diffusers"),
+        "transformers": package_version("transformers"),
+        "chordedit_commit": git_commit(),
+    }
+
+
+def gpu_name_for_device(device: str) -> Optional[str]:
+    if not device.startswith("cuda") or not torch.cuda.is_available():
+        return None
+    try:
+        return torch.cuda.get_device_name(torch.device(device))
+    except (RuntimeError, ValueError):
+        return None
+
+
+def synchronize_device(device: str) -> None:
+    """Make CUDA timing include queued GPU work, without affecting CPU runs."""
+    if device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize(torch.device(device))
+
+
+def append_jsonl(path: Path, record: Dict[str, Any]) -> None:
+    ensure_dir(path.parent)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,6 +182,33 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--image-size", type=int, default=512, help="Resolution used when feeding the VAE.")
     parser.add_argument("--max-samples", type=int, default=None, help="Only process the first N records.")
+
+    parser.add_argument(
+        "--experiment-batch-id",
+        type=str,
+        default=DEFAULT_EXPERIMENT_BATCH_ID,
+        help="Experiment batch identifier written to the JSONL run records.",
+    )
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Optional run identifier. Defaults to a timestamped ID under the batch.",
+    )
+    parser.add_argument(
+        "--timing-output",
+        type=str,
+        default=None,
+        help=(
+            "JSONL path for per-case timing/evaluation records, relative to --export-root "
+            f"when not absolute (default: {DEFAULT_TIMING_FILENAME})."
+        ),
+    )
+    parser.add_argument(
+        "--no-timing-records",
+        action="store_true",
+        help="Disable automatic JSONL timing records.",
+    )
 
     parser.add_argument("--pie-root", type=str, default=None, help="Root directory of PIE-Bench data.")
     parser.add_argument(
@@ -326,6 +423,12 @@ def save_prediction(image: Image.Image, destination: Path, *, overwrite: bool) -
 
 def main() -> None:
     args = parse_args()
+    run_started_at = now_iso()
+    run_clock = time.perf_counter()
+    run_id = args.run_id or (
+        f"{args.experiment_batch_id}_run_"
+        f"{datetime.now().astimezone().strftime('%Y%m%dT%H%M%S%z')}"
+    )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -350,6 +453,9 @@ def main() -> None:
     pie_root = Path(args.pie_root).expanduser().resolve() if args.pie_root else DEFAULT_PIE_ROOT
     export_root = Path(args.export_root).expanduser().resolve() if args.export_root else pie_root
     mapping_path = resolve_path(pie_root, args.mapping_file)
+    timing_output = None
+    if not args.no_timing_records:
+        timing_output = resolve_path(export_root, args.timing_output or DEFAULT_TIMING_FILENAME)
 
     records = load_pie_records(pie_root, mapping_path, args.image_subdir)
     if args.max_samples is not None:
@@ -367,6 +473,8 @@ def main() -> None:
     )
     LOGGER.info("Seed %s | Edit config %s", seed, edit_config)
 
+    model_load_started_at = now_iso()
+    model_load_clock = time.perf_counter()
     pipeline = ChordEditPipeline.from_local_weights(
         component_paths=component_paths,
         default_edit_config=edit_config,
@@ -377,6 +485,17 @@ def main() -> None:
         compute_dtype=compute_dtype,
         use_attention_mask=args.use_attention_mask,
         use_safety_checker=args.use_safety_checker,
+    )
+    model_load_finished_at = now_iso()
+    model_load_seconds = elapsed_seconds(model_load_clock)
+    resolved_device = str(getattr(pipeline, "_device", args.device or "cpu"))
+    gpu_name = gpu_name_for_device(resolved_device)
+    versions = runtime_versions()
+    LOGGER.info(
+        "Loaded pipeline on %s%s in %.3fs",
+        resolved_device,
+        f" ({gpu_name})" if gpu_name else "",
+        model_load_seconds,
     )
 
     output_dir = export_root / "output" / args.method_name / args.output_subdir
@@ -393,8 +512,57 @@ def main() -> None:
     skipped = 0
 
     for idx, record in enumerate(records, start=1):
+        case_started_at = now_iso()
+        case_clock = time.perf_counter()
         rel_output_path = output_dir / record.relative_path
+        timing_record: Dict[str, Any] = {
+            "record_type": "case",
+            "batch_id": args.experiment_batch_id,
+            "run_id": run_id,
+            "case_id": record.sample_id,
+            "evaluator": None,
+            "created_at": run_started_at,
+            "started_at": case_started_at,
+            "finished_at": None,
+            "elapsed_seconds": None,
+            "model_load_started_at": model_load_started_at,
+            "model_load_finished_at": model_load_finished_at,
+            "model_load_seconds": model_load_seconds,
+            "inference_started_at": None,
+            "inference_finished_at": None,
+            "inference_seconds": None,
+            "seed": seed,
+            "device": resolved_device,
+            "gpu_name": gpu_name,
+            "software_versions": versions,
+            "source_prompt": record.original_prompt,
+            "edited_prompt": record.edited_prompt,
+            "output_path": str(rel_output_path),
+            "output_exists": False,
+            "edit_direction_correct": None,
+            "scores": {
+                "edit_fidelity": None,
+                "background_preservation": None,
+                "identity_consistency": None,
+                "structure_consistency": None,
+                "prompt_following": None,
+            },
+            "failure_modes": [],
+            "notes": "",
+            "status": "started",
+            "error": None,
+        }
+
+        def finish_timing_record(status: str) -> None:
+            timing_record["status"] = status
+            timing_record["finished_at"] = now_iso()
+            timing_record["elapsed_seconds"] = elapsed_seconds(case_clock)
+            if timing_output is not None:
+                append_jsonl(timing_output, timing_record)
+
         if rel_output_path.exists() and not args.overwrite:
+            timing_record["output_exists"] = True
+            finish_timing_record("skipped_existing")
             skipped += 1
             continue
 
@@ -403,10 +571,17 @@ def main() -> None:
                 source_image = img.convert("RGB")
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.error("Failed to read %s: %s", record.image_path, exc)
+            timing_record["failure_modes"] = ["no_output"]
+            timing_record["error"] = str(exc)
+            finish_timing_record("input_error")
             skipped += 1
             continue
 
+        inference_started_at = now_iso()
+        inference_clock = time.perf_counter()
+        timing_record["inference_started_at"] = inference_started_at
         try:
+            synchronize_device(resolved_device)
             result = pipeline(
                 image=source_image,
                 source_prompt=record.original_prompt,
@@ -414,10 +589,18 @@ def main() -> None:
                 seed=seed,
                 output_type="pil",
             )
+            synchronize_device(resolved_device)
         except Exception as exc:  # pragma: no cover - runtime safety
             LOGGER.error("Pipeline failed on %s: %s", record.sample_id, exc)
+            timing_record["inference_finished_at"] = now_iso()
+            timing_record["inference_seconds"] = elapsed_seconds(inference_clock)
+            timing_record["failure_modes"] = ["no_output"]
+            timing_record["error"] = str(exc)
+            finish_timing_record("inference_error")
             skipped += 1
             continue
+        timing_record["inference_finished_at"] = now_iso()
+        timing_record["inference_seconds"] = elapsed_seconds(inference_clock)
 
         images = result.images
         if isinstance(images, list) and images:
@@ -427,6 +610,8 @@ def main() -> None:
             generated = pipeline._tensor_to_pil(images)[0]  # type: ignore[attr-defined]
         else:
             LOGGER.warning("No images returned for sample %s; skipping.", record.sample_id)
+            timing_record["failure_modes"] = ["no_output"]
+            finish_timing_record("no_output")
             skipped += 1
             continue
 
@@ -436,9 +621,33 @@ def main() -> None:
             target_source_path = source_dir / record.relative_path
             copy_file(record.image_path, target_source_path, overwrite=args.overwrite)
 
+        timing_record["output_exists"] = rel_output_path.exists()
+        finish_timing_record("saved" if timing_record["output_exists"] else "no_output")
         processed += 1
         if args.log_every and processed % args.log_every == 0:
             LOGGER.info("Saved %d/%d samples (skipped=%d)", processed, len(records), skipped)
+
+    run_finished_at = now_iso()
+    run_elapsed_seconds = elapsed_seconds(run_clock)
+    if timing_output is not None:
+        append_jsonl(
+            timing_output,
+            {
+                "record_type": "run_summary",
+                "batch_id": args.experiment_batch_id,
+                "run_id": run_id,
+                "created_at": run_started_at,
+                "started_at": run_started_at,
+                "finished_at": run_finished_at,
+                "elapsed_seconds": run_elapsed_seconds,
+                "model_load_started_at": model_load_started_at,
+                "model_load_finished_at": model_load_finished_at,
+                "model_load_seconds": model_load_seconds,
+                "requested_cases": len(records),
+                "processed_cases": processed,
+                "skipped_cases": skipped,
+            },
+        )
 
     LOGGER.info(
         "Finished PIE export. Saved %d sample(s), skipped %d (existing/errors). Results: %s",
@@ -446,6 +655,13 @@ def main() -> None:
         skipped,
         output_dir,
     )
+    if timing_output is not None:
+        LOGGER.info(
+            "Wrote per-case timing records for run %s to %s (total wall time %.3fs)",
+            run_id,
+            timing_output,
+            run_elapsed_seconds,
+        )
 
 
 if __name__ == "__main__":

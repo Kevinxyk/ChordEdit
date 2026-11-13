@@ -17,6 +17,44 @@
 
 边界测试点：这里说实话没有完全想好，因为小模型主要负责的是微调，而不是大面积调整，但是我依然想看大面积进行修改的效果如何，看看会不会有惊喜
 
+实验将于 test/img_edit_exp 中进行
+
+## metadata design
+
+{
+  "case_id": "case_...",
+  "case_type": "...",
+  "case_author": "...",
+  "source_prompt": "...",
+  "edited_prompt": "...",
+  "model": "sd-turbo",
+  "generator_steps": 1,
+  "seed": 42,
+  "resolution": "512x512",
+  "intended_edit": "..."
+}
+
+将当前实验设计的所有 metadata 放于 test/img_edit_exp/test_metadata.json
+
+## 图片资产存放设计
+
+每个 testcase 使用一张固定的 canonical source image。原图与实验输出分离保存，避免不同 seed 或不同模型运行互相覆盖：
+
+```text
+test/img_edit_exp/
+├── assets/source/{case_id}/
+│   ├── source.png
+│   ├── meta.jsonl
+│   └── source_metadata.json
+└── runs/{run_id}/
+    ├── outputs/{case_id}/seed_{seed}.png
+    └── run_records.jsonl
+```
+
+其中 `source.png` 是该 case 后续所有编辑实验共同使用的原图；`meta.jsonl` 保存与项目现有 `images/<case>/meta.jsonl` 兼容的 source/target/edit prompt；`source_metadata.json` 记录原图来源、生成模型、source seed、分辨率和生成时间。官网截图只作为 prompt 和案例语义的来源，不作为可复现的 benchmark source image；包括前三个官网 case 在内，所有 source image 都统一生成并固定为 512×512。
+
+当前第一批使用 `batch_id=exp_001`，预建的第一轮运行目录为 `exp_001_run_001`。输出文件名必须包含 seed，例如 `seed_42.png`、`seed_43.png`、`seed_44.png`。具体路径模板以 `test/img_edit_exp/test_metadata.json` 的 `image_storage` 为准。
+
 ## 普通测试点
 
 部分图片以及提示词出处：
